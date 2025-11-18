@@ -2,8 +2,20 @@ const express = require('express');
 const cors = require('cors');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { MongoClient } = require('mongodb');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
+
+// ============================================
+// RATE LIMITERS
+// ============================================
+const codeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per IP
+  message: { success: false, message: 'Too many code attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ============================================
 // WEBHOOK ROUTE (MUST BE FIRST - BEFORE JSON PARSING)
@@ -159,7 +171,12 @@ app.use(express.json());
 // ============================================
 // CONFIGURATION
 // ============================================
-const SECRET_CODE = 'IMAGEFY2025PRO';
+const SECRET_CODES = new Set([
+  process.env.SECRET_CODE_1,
+  process.env.SECRET_CODE_2,
+  process.env.SECRET_CODE_3,
+].filter(Boolean)); // Remove undefined/null values
+
 let db;
 
 // ============================================
@@ -216,23 +233,43 @@ app.post('/check-pro', async (req, res) => {
   }
 });
 
-// Verify secret code
-app.post('/verify-code', async (req, res) => {
+// Verify secret code (with rate limiting)
+app.post('/verify-code', codeLimiter, async (req, res) => {
   const { code, email } = req.body;
   
-  if (!email) {
-    return res.json({ success: false, message: 'Email required' });
+  // Validate inputs
+  if (!email || !code) {
+    console.log('❌ Missing email or code');
+    return res.json({ success: false, message: 'Email and code required' });
   }
   
-  if (code === SECRET_CODE) {
+  // Validate email format
+  if (!email.includes('@') || !email.includes('.')) {
+    console.log('❌ Invalid email format:', email);
+    return res.json({ success: false, message: 'Invalid email format' });
+  }
+  
+  // Normalize code (trim whitespace, uppercase)
+  const normalizedCode = code.trim().toUpperCase();
+  
+  // Check if code is valid (server-side validation - SECURE!)
+  if (SECRET_CODES.has(normalizedCode)) {
     try {
+      // Check if code was already used (optional - for one-time codes)
+      const existingUser = await db.collection('users').findOne({ 
+        email,
+        method: 'secret_code'
+      });
+      
+      // Activate Pro
       await db.collection('users').updateOne(
         { email },
         { 
           $set: { 
             isPro: true, 
             activatedAt: new Date(), 
-            method: 'secret_code' 
+            method: 'secret_code',
+            codeUsed: normalizedCode
           } 
         },
         { upsert: true }
@@ -240,12 +277,13 @@ app.post('/verify-code', async (req, res) => {
       
       console.log('✅ Pro activated via secret code for:', email);
       res.json({ success: true, isPro: true });
+      
     } catch (error) {
-      console.error('Error activating Pro:', error);
+      console.error('❌ Error activating Pro:', error);
       res.json({ success: false, message: 'Database error' });
     }
   } else {
-    console.log('❌ Invalid secret code attempt for:', email);
+    console.log('❌ Invalid secret code attempt for:', email, '| Code:', normalizedCode);
     res.json({ success: false, message: 'Invalid code' });
   }
 });
@@ -281,7 +319,7 @@ app.post('/get-session-email', async (req, res) => {
 });
 
 // ============================================
-// 🆕 CANCEL SUBSCRIPTION ENDPOINT
+// CANCEL SUBSCRIPTION ENDPOINT
 // ============================================
 app.post('/cancel-subscription', async (req, res) => {
   const { email } = req.body;
@@ -360,7 +398,7 @@ app.post('/cancel-subscription', async (req, res) => {
 });
 
 // ============================================
-// 🆕 CREATE STRIPE CUSTOMER PORTAL SESSION (ALTERNATIVE)
+// CREATE STRIPE CUSTOMER PORTAL SESSION
 // ============================================
 app.post('/create-portal-session', async (req, res) => {
   const { email } = req.body;
@@ -445,6 +483,7 @@ app.listen(PORT, () => {
   console.log('🚀 Stripe:', process.env.STRIPE_SECRET_KEY ? '✅ Configured' : '❌ Missing');
   console.log('🚀 MongoDB:', process.env.MONGODB_URI ? '✅ Configured' : '❌ Missing');
   console.log('🚀 Webhook Secret:', process.env.STRIPE_WEBHOOK_SECRET ? '✅ Configured' : '❌ Missing');
+  console.log('🚀 Secret Codes:', SECRET_CODES.size > 0 ? `✅ ${SECRET_CODES.size} configured` : '⚠️ None configured');
 });
 
 // Graceful shutdown
