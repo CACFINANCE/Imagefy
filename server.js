@@ -32,7 +32,6 @@ app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) =
     const session = event.data.object;
     const email = session.customer_email;
     
-    // Save to database
     await db.collection('users').updateOne(
       { email },
       { $set: { isPro: true, activatedAt: new Date() } },
@@ -62,7 +61,6 @@ app.post('/verify-code', async (req, res) => {
   const { code, email } = req.body;
   
   if (code === SECRET_CODE) {
-    // Activate Pro
     await db.collection('users').updateOne(
       { email },
       { $set: { isPro: true, activatedAt: new Date(), method: 'secret_code' } },
@@ -88,10 +86,11 @@ app.post('/get-session-email', async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log('🚀 Backend running on port', process.env.PORT || 3000);
+app.get('/', (req, res) => {
+  res.json({ status: 'Imagefy Backend Running' });
 });
 
+// ⚠️ THIS SHOULD ONLY APPEAR ONCE AT THE VERY END
 app.listen(process.env.PORT || 3000, () => {
-  console.log('🚀 Backend running!');
+  console.log('🚀 Backend running on port', process.env.PORT || 3000);
 });
