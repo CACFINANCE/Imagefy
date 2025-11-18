@@ -12,7 +12,7 @@ const app = express();
 const codeLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts per IP
-  message: { success: false, message: 'Too many code attempts, please try again later' },
+  message: { success: false, message: 'Too many attempts, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -129,7 +129,7 @@ app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) =
     }
   }
   
-  // Handle subscription deletion (cancellation)
+  // Handle subscription deletion (cancellation) - ONLY for Stripe subscriptions
   else if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
     
@@ -142,17 +142,38 @@ app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) =
       console.log('❌ For:', email);
       
       if (email) {
-        await db.collection('users').updateOne(
-          { email },
-          { 
-            $set: { 
-              isPro: false, 
-              cancelledAt: new Date(),
-              subscriptionStatus: 'cancelled'
-            } 
-          }
-        );
-        console.log('✅ Pro status removed for:', email);
+        // Check if user has lifetime code access - if so, don't remove Pro
+        const user = await db.collection('users').findOne({ email });
+        
+        if (user && user.method === 'secret_code') {
+          console.log('⚠️ User has lifetime code access - keeping Pro status');
+          await db.collection('users').updateOne(
+            { email },
+            { 
+              $set: { 
+                subscriptionStatus: 'cancelled',
+                cancelledAt: new Date()
+              },
+              $unset: { 
+                stripeCustomerId: "",
+                subscriptionId: ""
+              }
+            }
+          );
+        } else {
+          // Regular Stripe user - remove Pro
+          await db.collection('users').updateOne(
+            { email },
+            { 
+              $set: { 
+                isPro: false, 
+                cancelledAt: new Date(),
+                subscriptionStatus: 'cancelled'
+              } 
+            }
+          );
+          console.log('✅ Pro status removed for:', email);
+        }
       }
     } catch (error) {
       console.error('❌ Error processing cancellation:', error);
@@ -169,7 +190,10 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================
-// CONFIGURATION
+// CONFIGURATION - SECRET CODES (HIDDEN FROM USERS)
+// These codes grant PERMANENT/LIFETIME Pro access
+// Reusable by anyone who knows them
+// Valid until changed in environment variables
 // ============================================
 const SECRET_CODES = new Set([
   process.env.SECRET_CODE_1,
@@ -225,7 +249,8 @@ app.post('/check-pro', async (req, res) => {
     
     res.json({ 
       isPro: isPro,
-      subscriptionStatus: user?.subscriptionStatus || null
+      subscriptionStatus: user?.subscriptionStatus || null,
+      method: user?.method || null
     });
   } catch (error) {
     console.error('Error checking Pro status:', error);
@@ -233,7 +258,7 @@ app.post('/check-pro', async (req, res) => {
   }
 });
 
-// Verify secret code (with rate limiting)
+// Verify secret code (HIDDEN ENDPOINT - grants LIFETIME Pro access)
 app.post('/verify-code', codeLimiter, async (req, res) => {
   const { code, email } = req.body;
   
@@ -255,13 +280,8 @@ app.post('/verify-code', codeLimiter, async (req, res) => {
   // Check if code is valid (server-side validation - SECURE!)
   if (SECRET_CODES.has(normalizedCode)) {
     try {
-      // Check if code was already used (optional - for one-time codes)
-      const existingUser = await db.collection('users').findOne({ 
-        email,
-        method: 'secret_code'
-      });
-      
-      // Activate Pro
+      // Grant PERMANENT Pro access (lifetime - no expiration)
+      // Code is reusable - any email can use the same code
       await db.collection('users').updateOne(
         { email },
         { 
@@ -269,13 +289,14 @@ app.post('/verify-code', codeLimiter, async (req, res) => {
             isPro: true, 
             activatedAt: new Date(), 
             method: 'secret_code',
-            codeUsed: normalizedCode
+            codeUsedAt: new Date(),
+            lifetimeAccess: true
           } 
         },
         { upsert: true }
       );
       
-      console.log('✅ Pro activated via secret code for:', email);
+      console.log('✅ LIFETIME Pro activated via secret code for:', email);
       res.json({ success: true, isPro: true });
       
     } catch (error) {
@@ -283,7 +304,7 @@ app.post('/verify-code', codeLimiter, async (req, res) => {
       res.json({ success: false, message: 'Database error' });
     }
   } else {
-    console.log('❌ Invalid secret code attempt for:', email, '| Code:', normalizedCode);
+    console.log('❌ Invalid secret code attempt for:', email);
     res.json({ success: false, message: 'Invalid code' });
   }
 });
@@ -342,6 +363,15 @@ app.post('/cancel-subscription', async (req, res) => {
       return res.status(404).json({ 
         success: false, 
         error: 'User not found' 
+      });
+    }
+    
+    // Check if user has lifetime code access
+    if (user.method === 'secret_code') {
+      console.log('⚠️ User has lifetime code access - cannot cancel');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'You have lifetime Pro access via code - no subscription to cancel' 
       });
     }
     
@@ -412,7 +442,20 @@ app.post('/create-portal-session', async (req, res) => {
   try {
     const user = await db.collection('users').findOne({ email });
     
-    if (!user || !user.stripeCustomerId) {
+    if (!user) {
+      console.log('❌ User not found:', email);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if user has lifetime code access
+    if (user.method === 'secret_code') {
+      console.log('⚠️ User has lifetime code access - no portal needed');
+      return res.status(400).json({ 
+        error: 'You have lifetime Pro access - no subscription to manage' 
+      });
+    }
+    
+    if (!user.stripeCustomerId) {
       console.log('❌ No Stripe customer ID found for:', email);
       return res.status(404).json({ error: 'No subscription found' });
     }
@@ -455,7 +498,8 @@ app.post('/get-user-info', async (req, res) => {
       isPro: user.isPro,
       activatedAt: user.activatedAt,
       method: user.method,
-      subscriptionStatus: user.subscriptionStatus
+      subscriptionStatus: user.subscriptionStatus,
+      lifetimeAccess: user.lifetimeAccess || false
     });
   } catch (error) {
     console.error('Error getting user info:', error);
