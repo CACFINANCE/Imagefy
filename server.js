@@ -280,6 +280,123 @@ app.post('/get-session-email', async (req, res) => {
   }
 });
 
+// ============================================
+// 🆕 CANCEL SUBSCRIPTION ENDPOINT
+// ============================================
+app.post('/cancel-subscription', async (req, res) => {
+  const { email } = req.body;
+  
+  console.log('🚫 Cancel subscription request for:', email);
+  
+  if (!email) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Email is required' 
+    });
+  }
+  
+  try {
+    // Find the user in database
+    const user = await db.collection('users').findOne({ email });
+    
+    if (!user) {
+      console.log('❌ User not found:', email);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'User not found' 
+      });
+    }
+    
+    const subscriptionId = user.subscriptionId;
+    
+    if (!subscriptionId) {
+      console.log('❌ No subscription ID found for:', email);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'No active subscription found' 
+      });
+    }
+    
+    console.log('🔍 Found subscription ID:', subscriptionId);
+    
+    // Cancel the subscription at period end (keeps access until billing period ends)
+    const canceledSubscription = await stripe.subscriptions.update(
+      subscriptionId,
+      { cancel_at_period_end: true }
+    );
+    
+    console.log('✅ Subscription set to cancel at period end');
+    
+    // Update database to reflect cancellation status
+    await db.collection('users').updateOne(
+      { email },
+      { 
+        $set: { 
+          subscriptionStatus: 'cancelling',
+          cancelRequestedAt: new Date(),
+          cancelAtPeriodEnd: true
+        } 
+      }
+    );
+    
+    const periodEndDate = new Date(canceledSubscription.current_period_end * 1000);
+    
+    console.log('✅ Subscription will end on:', periodEndDate);
+    
+    res.json({ 
+      success: true, 
+      message: 'Subscription will be cancelled at period end',
+      periodEnd: periodEndDate,
+      accessUntil: periodEndDate.toLocaleDateString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Cancel subscription error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to cancel subscription' 
+    });
+  }
+});
+
+// ============================================
+// 🆕 CREATE STRIPE CUSTOMER PORTAL SESSION (ALTERNATIVE)
+// ============================================
+app.post('/create-portal-session', async (req, res) => {
+  const { email } = req.body;
+  
+  console.log('🔐 Portal session request for:', email);
+  
+  if (!email) {
+    return res.status(400).json({ error: 'Email required' });
+  }
+  
+  try {
+    const user = await db.collection('users').findOne({ email });
+    
+    if (!user || !user.stripeCustomerId) {
+      console.log('❌ No Stripe customer ID found for:', email);
+      return res.status(404).json({ error: 'No subscription found' });
+    }
+    
+    console.log('🔍 Found customer ID:', user.stripeCustomerId);
+    
+    // Create a portal session for the customer
+    const session = await stripe.billingPortal.sessions.create({
+      customer: user.stripeCustomerId,
+      return_url: 'https://your-domain.com', // Update with your actual domain
+    });
+    
+    console.log('✅ Portal session created');
+    
+    res.json({ url: session.url });
+    
+  } catch (error) {
+    console.error('❌ Portal session error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get user info (optional - for debugging)
 app.post('/get-user-info', async (req, res) => {
   const { email } = req.body;
