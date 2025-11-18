@@ -75,6 +75,23 @@ app.post('/verify-code', async (req, res) => {
   }
 });
 
+// Get email from Stripe session
+app.post('/get-session-email', async (req, res) => {
+  const { sessionId } = req.body;
+  
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    res.json({ email: session.customer_email });
+  } catch (error) {
+    console.error('Error retrieving session:', error);
+    res.status(400).json({ error: 'Invalid session' });
+  }
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('🚀 Backend running on port', process.env.PORT || 3000);
+});
+
 app.listen(process.env.PORT || 3000, () => {
   console.log('🚀 Backend running!');
 });
