@@ -79,7 +79,17 @@ app.post('/get-session-email', async (req, res) => {
   
   try {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    res.json({ email: session.customer_email });
+    
+    // Try multiple places where email might be
+    const email = session.customer_email || 
+                  session.customer_details?.email || 
+                  null;
+    
+    console.log('Session retrieved:', sessionId);
+    console.log('Email found:', email);
+    console.log('Full session:', JSON.stringify(session, null, 2));
+    
+    res.json({ email });
   } catch (error) {
     console.error('Error retrieving session:', error);
     res.status(400).json({ error: 'Invalid session' });
