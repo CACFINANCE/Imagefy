@@ -78,11 +78,3 @@ app.post('/verify-code', async (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log('🚀 Backend running!');
 });
-```
-
-### File 3: `.env.example`
-```
-STRIPE_SECRET_KEY=sk_test_your_key_here
-STRIPE_WEBHOOK_SECRET=whsec_your_webhook_secret
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net
-PORT=3000
