@@ -384,7 +384,7 @@ app.post('/create-portal-session', async (req, res) => {
     // Create a portal session for the customer
     const session = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,
-      return_url: 'https://your-domain.com', // Update with your actual domain
+      return_url: 'https://imagefy.org/',
     });
     
     console.log('✅ Portal session created');
