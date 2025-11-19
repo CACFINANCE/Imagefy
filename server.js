@@ -201,6 +201,9 @@ const SECRET_CODES = new Set([
   process.env.SECRET_CODE_3,
 ].filter(Boolean)); // Remove undefined/null values
 
+// Pexels API Key
+const PEXELS_API_KEY = 'ymdzigbV5NbLWIZSnPh4Usl5t5TAUYN5k8NsoNc9ePQYMIXrMlaHdYip';
+
 let db;
 
 // ============================================
@@ -336,6 +339,53 @@ app.post('/get-session-email', async (req, res) => {
   } catch (error) {
     console.error('Error retrieving session:', error);
     res.status(400).json({ error: 'Invalid session ID' });
+  }
+});
+
+// ============================================
+// PEXELS PROXY ENDPOINT (FIXES CORS ISSUES)
+// ============================================
+app.get('/pexels-proxy', async (req, res) => {
+  const { query, page } = req.query;
+  
+  console.log('🖼️ Pexels proxy request - Query:', query, 'Page:', page);
+  
+  if (!query) {
+    return res.status(400).json({ error: 'Query parameter required' });
+  }
+  
+  try {
+    // Use dynamic import for node-fetch (works in Node 18+)
+    const fetch = (await import('node-fetch')).default;
+    
+    const pexelsUrl = `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=12&page=${page || 1}`;
+    
+    console.log('🔍 Fetching from Pexels:', pexelsUrl);
+    
+    const response = await fetch(pexelsUrl, {
+      headers: {
+        'Authorization': PEXELS_API_KEY
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Pexels API error:', response.status, errorText);
+      throw new Error(`Pexels API returned ${response.status}: ${errorText}`);
+    }
+    
+    const data = await response.json();
+    
+    console.log('✅ Pexels returned', data.photos?.length || 0, 'photos');
+    
+    res.json(data);
+    
+  } catch (error) {
+    console.error('❌ Pexels proxy error:', error.message);
+    res.status(500).json({ 
+      error: error.message,
+      details: 'Failed to fetch from Pexels API'
+    });
   }
 });
 
@@ -528,6 +578,7 @@ app.listen(PORT, () => {
   console.log('🚀 MongoDB:', process.env.MONGODB_URI ? '✅ Configured' : '❌ Missing');
   console.log('🚀 Webhook Secret:', process.env.STRIPE_WEBHOOK_SECRET ? '✅ Configured' : '❌ Missing');
   console.log('🚀 Secret Codes:', SECRET_CODES.size > 0 ? `✅ ${SECRET_CODES.size} configured` : '⚠️ None configured');
+  console.log('🚀 Pexels API:', PEXELS_API_KEY ? '✅ Configured' : '⚠️ Missing');
 });
 
 // Graceful shutdown
