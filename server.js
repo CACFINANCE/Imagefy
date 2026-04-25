@@ -443,11 +443,19 @@ app.post('/get-credits', async (req, res) => {
 // Atomically spend credits. The frontend calls this after a successful AI op.
 // Uses a guarded $inc so two concurrent requests can't both succeed when the
 // balance would go negative.
+//
+// Field-name compatibility: the frontend posts `{ email, feature, cost }`, so
+// `cost` is the canonical field. `amount` is also accepted as an alias.
 app.post('/use-credits', async (req, res) => {
-  const { email, amount } = req.body;
+  const { email, amount, cost, feature } = req.body;
 
-  if (!email || !Number.isFinite(amount) || amount <= 0) {
-    return res.status(400).json({ success: false, error: 'Email and positive amount required' });
+  // Accept either the frontend's `cost` field or `amount` as an alias.
+  const spend = Number.isFinite(cost)   ? cost
+              : Number.isFinite(amount) ? amount
+              : null;
+
+  if (!email || spend === null || spend <= 0) {
+    return res.status(400).json({ success: false, error: 'Email and positive cost required' });
   }
 
   try {
@@ -462,10 +470,10 @@ app.post('/use-credits', async (req, res) => {
     await refreshCreditsIfDue(user);
 
     // Atomic conditional decrement: only succeeds if the user still has
-    // at least `amount` credits at the moment of the write.
+    // at least `spend` credits at the moment of the write.
     const result = await db.collection('users').findOneAndUpdate(
-      { email, credits: { $gte: amount } },
-      { $inc: { credits: -amount } },
+      { email, credits: { $gte: spend } },
+      { $inc: { credits: -spend } },
       { returnDocument: 'after' }
     );
 
@@ -480,6 +488,10 @@ app.post('/use-credits', async (req, res) => {
         error: 'Insufficient credits',
         remainingCredits: fresh?.credits ?? 0
       });
+    }
+
+    if (feature) {
+      console.log(`💸 ${email} spent ${spend} on ${feature} → ${updated.credits} remaining`);
     }
 
     res.json({
